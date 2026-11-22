@@ -1,0 +1,10 @@
+{
+  "command": "node",
+  "args": [
+    "--max-old-space-size=96",
+    "main.mjs"
+  ],
+  "restart_policy": "always",
+  "display_name": "AGY Drag Graft Bridge",
+  "description": "Drag sidebar conversations into the Antigravity composer to insert native session-reference chips."
+}

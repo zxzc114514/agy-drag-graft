@@ -1,0 +1,23 @@
+{
+  "name": "agy-drag-graft",
+  "displayName": "AGY Drag Graft",
+  "version": "0.1.0",
+  "description": "将左侧历史会话直接拖入 Antigravity 对话输入框，自动插入原生会话引用胶囊并保留对话区分屏与侧边栏拖拽。",
+  "logo": "assets/logo.svg",
+  "author": {
+    "name": "ImportCoffee",
+    "url": "https://github.com/zxzc114514"
+  },
+  "homepage": "https://github.com/zxzc114514/agy-drag-graft",
+  "repository": "https://github.com/zxzc114514/agy-drag-graft",
+  "license": "MIT",
+  "keywords": [
+    "antigravity",
+    "agy",
+    "plugin",
+    "drag-and-drop",
+    "conversation",
+    "citation",
+    "sidecar"
+  ]
+}
