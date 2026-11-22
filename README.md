@@ -33,7 +33,9 @@
 帮我安装并启用这个 Antigravity 插件：https://github.com/zxzc114514/agy-drag-graft
 ```
 
-### 方式二：命令行安装
+### 方式二：下载 Release 压缩包或克隆后命令行安装
+
+可从 [GitHub Releases](https://github.com/zxzc114514/agy-drag-graft/releases) 下载最新 `agy-drag-graft-<version>.zip`（附带 `.zip.sha256` 校验文件），解压后进入 `agy-drag-graft` 目录运行安装脚本：
 
 ```powershell
 # Windows（PowerShell）
@@ -84,11 +86,14 @@ Antigravity Desktop `2.33.0+` 默认关闭渲染器调试端口，需在启动�
 
 ---
 
-## 自动化测试
+## 自动化测试与离线打包
 
 ```bash
 npm run check
 python -m unittest discover -s tests -p "test_*.py" -v
+
+# 生成离线安装 ZIP 包及 SHA256 校验文件（输出至 dist/）
+python manage.py package
 ```
 
 ---

@@ -12,7 +12,7 @@
     "url": "https://github.com/zxzc114514/agy-drag-graft.git"
   },
   "scripts": {
-    "test": "node --test \"tests/*.test.mjs\"",
+    "test": "node --test tests/cdp-runtime.test.mjs tests/renderer.test.mjs",
     "check": "node --check src/renderer.cjs && node --check src/cdp-runtime.mjs && node --check sidecars/bridge/main.mjs && npm test"
   },
   "engines": {

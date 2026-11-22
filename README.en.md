@@ -33,7 +33,9 @@ All scripts have zero third-party dependencies (**Python 3.10+** and **Node.js 2
 Please install and enable this Antigravity plugin: https://github.com/zxzc114514/agy-drag-graft
 ```
 
-### Option 2: Command-line installation
+### Option 2: Download a Release Archive or Install from Source
+
+Download the latest `agy-drag-graft-<version>.zip` (with `.zip.sha256` checksum) from [GitHub Releases](https://github.com/zxzc114514/agy-drag-graft/releases), extract it, and run the installer inside `agy-drag-graft`:
 
 ```powershell
 # Windows (PowerShell)
@@ -73,11 +75,14 @@ Starting with Antigravity Desktop `2.33.0+`, the renderer remote debugging port 
 
 ---
 
-## Verification
+## Verification & Packaging
 
 ```bash
 npm run check
 python -m unittest discover -s tests -p "test_*.py" -v
+
+# Build offline release ZIP and SHA256 checksum into dist/
+python manage.py package
 ```
 
 ---

@@ -1,9 +1,11 @@
+import hashlib
 import json
 import os
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -89,6 +91,32 @@ class ManageLifecycleTests(unittest.TestCase):
             manage.install(self.home)
         with self.assertRaises(RuntimeError):
             manage.uninstall(self.home)
+
+    def test_package_builds_verified_zip_and_sha256(self):
+        out_zip = self.home / 'dist' / 'agy-drag-graft-test.zip'
+        res = manage.package(output=out_zip)
+        self.assertTrue(out_zip.is_file())
+        sha_file = Path(res['checksumFile'])
+        self.assertTrue(sha_file.is_file())
+
+        expected_sha = hashlib.sha256(out_zip.read_bytes()).hexdigest()
+        self.assertEqual(res['sha256'], expected_sha)
+        self.assertEqual(sha_file.read_text(encoding='utf-8').split(), [expected_sha, out_zip.name])
+
+        with zipfile.ZipFile(out_zip, 'r') as archive:
+            names = set(archive.namelist())
+            for req in (
+                'agy-drag-graft/plugin.json',
+                'agy-drag-graft/manage.py',
+                'agy-drag-graft/install.ps1',
+                'agy-drag-graft/install.sh',
+                'agy-drag-graft/src/renderer.cjs',
+                'agy-drag-graft/src/cdp-runtime.mjs',
+                'agy-drag-graft/sidecars/bridge/main.mjs',
+                'agy-drag-graft/LICENSE',
+            ):
+                self.assertIn(req, names)
+            self.assertFalse(any('__pycache__' in name or name.endswith('.pyc') for name in names))
 
 
 if __name__ == '__main__':

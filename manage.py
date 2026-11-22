@@ -1,17 +1,35 @@
-"""零依赖 AGY Drag Graft 插件安装、状态检查与卸载管理工具。"""
+"""零依赖 AGY Drag Graft 插件安装、状态检查、打包与卸载管理工具。"""
 import argparse
 import fnmatch
+import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
 import sys
+import zipfile
 
 SOURCE = Path(__file__).resolve().parent
 PLUGIN_NAME = 'agy-drag-graft'
 SIDECAR_KEY = 'agy-drag-graft/bridge'
 RUNTIME_ITEMS = ('plugin.json', 'assets', 'src', 'sidecars')
-IGNORED_PATTERNS = ('__pycache__', '*.pyc', '.data', 'data', '*.log', 'node_modules', '*.tmp')
+DIST_ITEMS = (
+    'plugin.json',
+    'package.json',
+    'LICENSE',
+    'README.md',
+    'README.en.md',
+    'manage.py',
+    'install.ps1',
+    'install.sh',
+    'uninstall.ps1',
+    'uninstall.sh',
+    'assets',
+    'sidecars',
+    'src',
+    'tests',
+)
+IGNORED_PATTERNS = ('__pycache__', '*.pyc', '.data', 'data', '*.log', 'node_modules', '*.tmp', 'dist', '.git')
 
 
 def is_ignored(name):
@@ -194,6 +212,64 @@ def uninstall(home_dir, clean_config=False):
     print(json.dumps(build_status(home_dir), ensure_ascii=False, indent=2))
 
 
+def package(output=None):
+    """生成带顶层目录的离线安装 ZIP 包及其 SHA256 校验文件。"""
+    manifest = json_read(SOURCE / 'plugin.json')
+    version = manifest.get('version') or '0.0.0'
+    output_path = Path(output) if output else (SOURCE / 'dist' / f'{PLUGIN_NAME}-{version}.zip')
+    output_path = output_path.expanduser().resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    tmp_zip = output_path.with_name(f'{output_path.name}.{os.getpid()}.tmp')
+    packed_count = 0
+    try:
+        with zipfile.ZipFile(tmp_zip, 'w', zipfile.ZIP_DEFLATED) as archive:
+            for item in DIST_ITEMS:
+                src = SOURCE / item
+                if not src.exists():
+                    raise RuntimeError(f'缺少必要发行文件：{item}')
+                candidates = sorted(src.rglob('*')) if src.is_dir() else [src]
+                for file_path in candidates:
+                    if not file_path.is_file():
+                        continue
+                    rel = file_path.relative_to(SOURCE)
+                    if any(is_ignored(part) for part in rel.parts):
+                        continue
+                    arcname = (Path(PLUGIN_NAME) / rel).as_posix()
+                    archive.write(file_path, arcname)
+                    packed_count += 1
+        os.replace(tmp_zip, output_path)
+    finally:
+        if tmp_zip.exists():
+            try:
+                tmp_zip.unlink()
+            except OSError:
+                pass
+
+    digest = hashlib.sha256(output_path.read_bytes()).hexdigest()
+    checksum_path = output_path.with_name(f'{output_path.name}.sha256')
+    tmp_sha = checksum_path.with_name(f'{checksum_path.name}.{os.getpid()}.tmp')
+    try:
+        tmp_sha.write_text(f'{digest}  {output_path.name}\n', encoding='utf-8')
+        os.replace(tmp_sha, checksum_path)
+    finally:
+        if tmp_sha.exists():
+            try:
+                tmp_sha.unlink()
+            except OSError:
+                pass
+
+    result = {
+        'package': str(output_path),
+        'checksumFile': str(checksum_path),
+        'sha256': digest,
+        'version': version,
+        'files': packed_count,
+    }
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return result
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description='AGY Drag Graft 插件管理工具')
     parser.add_argument('--home', default=str(Path.home()), help='指定模拟或目标用户主目录（默认当前用户目录）')
@@ -208,6 +284,9 @@ def main(argv=None):
     p_uninstall = sub.add_parser('uninstall', help='卸载已安装的插件目录')
     p_uninstall.add_argument('--clean-config', action='store_true', help='同时从 config.json 移除 agy-drag-graft 相关键')
 
+    p_package = sub.add_parser('package', help='打包生成离线安装 ZIP 包与 SHA256 校验文件')
+    p_package.add_argument('--output', default=None, help='显式指定输出 ZIP 路径（默认写入 dist/）')
+
     args = parser.parse_args(argv)
     if args.command == 'status':
         print(json.dumps(build_status(args.home), ensure_ascii=False, indent=2))
@@ -215,6 +294,8 @@ def main(argv=None):
         install(args.home, register_config=args.register_config, node_path=args.node)
     elif args.command == 'uninstall':
         uninstall(args.home, clean_config=args.clean_config)
+    elif args.command == 'package':
+        package(output=args.output)
 
 
 if __name__ == '__main__':

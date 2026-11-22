@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 .data/
 data/
+dist/
 *.log
 *.tmp
 node_modules/
