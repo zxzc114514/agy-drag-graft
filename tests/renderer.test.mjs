@@ -515,27 +515,32 @@ test('拖拽侧边栏历史会话到输入框插入原生 chip 并取消宿主�
     env.setHits([env.mainEditor, env.mainBox]);
     env.body.dispatchEvent(new MockEvent('pointermove', { pointerId: 7, clientX: 400, clientY: 540, bubbles: true, cancelable: true }));
 
-    assert.match(env.mainBox.style.outline, /dashed/);
+    assert.equal(env.mainBox.style.outline, '2px dashed #4c8bf5');
     const badge = env.body.querySelector('[data-agy-drag-graft-ui="badge"]');
     assert.ok(badge);
     assert.equal(badge.textContent, '拖拽到此引用');
+    assert.equal(badge.getAttribute('data-agy-drag-graft-mode'), 'hover');
     assert.equal(env.doc.documentElement.getAttribute('data-agy-drag-graft-hover-input'), 'true');
     const suppressStyle = env.doc.head.querySelector('[data-agy-drag-graft-ui="suppress-split-style"]');
     assert.ok(suppressStyle);
     assert.ok(suppressStyle.textContent.includes('body > div.fixed.pointer-events-none.bg-primary.opacity-15.z-\\[5000\\]'));
     assert.ok(suppressStyle.textContent.includes('opacity: 0 !important'));
 
-    // 拖离输入框进入对话正文区时应恢复宿主分屏遮罩，再拖回输入框重新压制
+    // 拖离输入框进入对话正文区时应恢复宿主分屏遮罩并退回淡色引导态，再拖回输入框重新压制并加强高亮
     env.setHits([env.transcriptArea, env.mainView]);
     env.body.dispatchEvent(new MockEvent('pointermove', { pointerId: 7, clientX: 400, clientY: 260, bubbles: true, cancelable: true }));
     assert.equal(env.doc.documentElement.getAttribute('data-agy-drag-graft-hover-input'), null);
-    assert.equal(env.mainBox.style.outline, '');
-    assert.equal(env.body.querySelector('[data-agy-drag-graft-ui="badge"]'), null);
+    assert.equal(env.mainBox.style.outline, '2px dashed rgba(76, 139, 245, 0.55)');
+    const guideBadge = env.body.querySelector('[data-agy-drag-graft-ui="badge"]');
+    assert.ok(guideBadge);
+    assert.equal(guideBadge.textContent, '拖拽到此引用');
+    assert.equal(guideBadge.getAttribute('data-agy-drag-graft-mode'), 'guide');
 
     env.setHits([env.mainEditor, env.mainBox]);
     env.body.dispatchEvent(new MockEvent('pointermove', { pointerId: 7, clientX: 420, clientY: 545, bubbles: true, cancelable: true }));
     assert.equal(env.doc.documentElement.getAttribute('data-agy-drag-graft-hover-input'), 'true');
-    assert.match(env.mainBox.style.outline, /dashed/);
+    assert.equal(env.mainBox.style.outline, '2px dashed #4c8bf5');
+    assert.equal(env.body.querySelector('[data-agy-drag-graft-ui="badge"]')?.getAttribute('data-agy-drag-graft-mode'), 'hover');
 
     const up = new MockEvent('pointerup', { pointerId: 7, pointerType: 'mouse', clientX: 420, clientY: 545, bubbles: true, cancelable: true });
     span.dispatchEvent(up);
@@ -797,6 +802,76 @@ test('起拖时子元素触发 blur 不清空拖拽态，仅 window 自身失焦
     env.win.dispatchEvent(new MockEvent('blur', { bubbles: false }));
     assert.equal(env.mainBox.style.outline, '');
     assert.equal(env.body.querySelector('[data-agy-drag-graft-ui="badge"]'), null);
+    assert.equal(env.doc.documentElement.getAttribute('data-agy-drag-graft-hover-input'), null);
+  } finally {
+    globalThis.window?.__agyDragGraftDispose?.();
+    env.teardown();
+  }
+});
+
+test('起拖会话即在所有可见输入框显示淡色引导框，悬停时仅加强当前输入框且取消后全量清理', () => {
+  const mainId = '11111111-1111-1111-1111-111111111111';
+  const subId = '99999999-9999-9999-9999-999999999999';
+  const env = setupDomEnv({ mainId });
+  try {
+    env.mainBox.style.outline = '1px solid transparent';
+
+    const auxPane = new MockElement('div', { 'data-aux-pane-open': 'true' });
+    const subTranscript = new MockElement('div', {
+      'data-testid': 'subagent-tab-conversation',
+      'data-cascade-id': subId,
+    });
+    const subBox = new MockElement('div', { 'data-testid': 'agent-input-box' });
+    subBox.setRect({ left: 950, top: 500, right: 1350, bottom: 600, width: 400, height: 100 });
+    const subLex = createMockLexicalEditor();
+    const subEditor = new MockElement('div', {
+      contenteditable: 'true',
+      'data-lexical-editor': 'true',
+    });
+    subEditor.__lexicalEditor = subLex;
+    subBox.append(subEditor);
+    auxPane.append(subTranscript, subBox);
+    env.body.append(auxPane);
+
+    installAgyDragGraft({ version: '0.1.0' });
+    const { span } = env.makeRow('22222222-2222-2222-2222-222222222222', 'Guide Highlight');
+
+    span.dispatchEvent(new MockEvent('pointerdown', { button: 0, pointerId: 21, clientX: 50, clientY: 100, bubbles: true, cancelable: true }));
+
+    // 位移小于 8px 时不显示任何引导框或浮标
+    env.setHits([env.sidebarList, env.sidebarNav]);
+    env.body.dispatchEvent(new MockEvent('pointermove', { pointerId: 21, clientX: 52, clientY: 102, bubbles: true, cancelable: true }));
+    assert.equal(env.body.querySelectorAll('[data-agy-drag-graft-ui="badge"]').length, 0);
+    assert.equal(env.mainBox.style.outline, '1px solid transparent');
+
+    // 位移达到阈值（仍在侧边栏内部）：所有可见输入框同时呈现淡色引导框，且不压制宿主分屏属性
+    env.body.dispatchEvent(new MockEvent('pointermove', { pointerId: 21, clientX: 65, clientY: 110, bubbles: true, cancelable: true }));
+    assert.equal(env.doc.documentElement.getAttribute('data-agy-drag-graft-hover-input'), null);
+    assert.equal(env.mainBox.style.outline, '2px dashed rgba(76, 139, 245, 0.55)');
+    assert.equal(subBox.style.outline, '2px dashed rgba(76, 139, 245, 0.55)');
+    const guideBadges = env.body.querySelectorAll('[data-agy-drag-graft-ui="badge"]');
+    assert.equal(guideBadges.length, 2);
+    for (const b of guideBadges) {
+      assert.equal(b.textContent, '拖拽到此引用');
+      assert.equal(b.getAttribute('data-agy-drag-graft-mode'), 'guide');
+    }
+
+    // 指针移入 subBox：仅 subBox 切换为悬停强高亮并激活分屏压制，mainBox 保持淡色引导态
+    env.setHits([subEditor, subBox]);
+    env.body.dispatchEvent(new MockEvent('pointermove', { pointerId: 21, clientX: 1100, clientY: 540, bubbles: true, cancelable: true }));
+    assert.equal(env.doc.documentElement.getAttribute('data-agy-drag-graft-hover-input'), 'true');
+    assert.equal(subBox.style.outline, '2px dashed #4c8bf5');
+    assert.equal(env.mainBox.style.outline, '2px dashed rgba(76, 139, 245, 0.55)');
+    const hoverBadges = env.body.querySelectorAll('[data-agy-drag-graft-ui="badge"]');
+    assert.equal(hoverBadges.length, 2);
+    assert.equal(hoverBadges.filter((b) => b.getAttribute('data-agy-drag-graft-mode') === 'hover').length, 1);
+    assert.equal(hoverBadges.filter((b) => b.getAttribute('data-agy-drag-graft-mode') === 'guide').length, 1);
+
+    // 按 Escape 取消拖拽：精准还原所有输入框原有内联样式并清空浮标
+    env.win.dispatchEvent(new MockEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    assert.equal(env.mainBox.style.outline, '1px solid transparent');
+    assert.equal(subBox.style.outline, '');
+    assert.equal(env.body.querySelectorAll('[data-agy-drag-graft-ui="badge"]').length, 0);
     assert.equal(env.doc.documentElement.getAttribute('data-agy-drag-graft-hover-input'), null);
   } finally {
     globalThis.window?.__agyDragGraftDispose?.();

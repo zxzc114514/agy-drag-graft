@@ -153,6 +153,7 @@ export class CdpConnection {
       this.ws.addEventListener('open', () => { clearTimeout(timer); resolve(); }, { once: true });
       this.ws.addEventListener('error', () => { clearTimeout(timer); this.close(); reject(new Error('CDP 连接失败')); }, { once: true });
     });
+    this.ws.addEventListener('error', () => this.close());
     return this;
   }
 
@@ -250,10 +251,18 @@ export class SidecarOwner {
     const gen = this.generation;
     const checking = (async () => {
       let owned = false;
-      try {
-        const current = await this.read();
-        owned = Boolean(validOwnerRecord(current) && current.pid === this.pid && current.token === this.token);
-      } catch {}
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        if (!this.running || gen !== this.generation) return false;
+        try {
+          const current = await this.read();
+          owned = Boolean(validOwnerRecord(current) && current.pid === this.pid && current.token === this.token);
+          break;
+        } catch {
+          if (attempt < 2) {
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+        }
+      }
       if (!this.running || gen !== this.generation) return false;
       this.owned = owned;
       return owned;
@@ -375,6 +384,7 @@ export class DragGraftRuntime {
     targetOrigin = (target) => new URL(target.url).origin,
     onBeforeTick = null,
     interval = 3000,
+    keepAlive = true,
   }) {
     if (typeof source !== 'string' || !source) throw new Error('必须提供渲染注入脚本内容');
     this.profile = profile;
@@ -388,6 +398,7 @@ export class DragGraftRuntime {
     this.targetOrigin = targetOrigin;
     this.onBeforeTick = onBeforeTick;
     this.interval = interval;
+    this.keepAlive = Boolean(keepAlive);
     this.sessions = new Map();
     this.running = false;
     this.stopping = false;
@@ -397,12 +408,16 @@ export class DragGraftRuntime {
   }
 
   /** 更新内存中的注入脚本与内容指纹，将在下一轮 tick 自动热替换。 */
-  updateBundle({ source, version }) {
-    if (typeof source !== 'string' || !source) return;
-    this.source = source;
+  updateBundle({ source, code, version } = {}) {
+    const nextSource = typeof source === 'string' && source
+      ? source
+      : (typeof code === 'string' && code ? code : '');
+    if (!nextSource) return false;
+    this.source = nextSource;
     if (typeof version === 'string' && version) {
       this.version = version;
     }
+    return true;
   }
 
   async writeStatus(state, message) {
@@ -414,13 +429,18 @@ export class DragGraftRuntime {
       checkedAt: new Date().toISOString(),
     };
     if (!this.dataDir) return;
+    let tmp = null;
     try {
       if (!await this.owns()) return;
       await mkdir(this.dataDir, { recursive: true });
-      const tmp = join(this.dataDir, `status.${process.pid}.tmp`);
+      tmp = join(this.dataDir, `status.${process.pid}.tmp`);
       await writeFile(tmp, `${JSON.stringify(this.health, null, 2)}\n`, 'utf8');
       renameSync(tmp, join(this.dataDir, 'status.json'));
-    } catch {}
+    } catch {
+      if (tmp) {
+        try { unlinkSync(tmp); } catch {}
+      }
+    }
   }
 
   async attach(target) {
@@ -458,16 +478,18 @@ export class DragGraftRuntime {
     }
   }
 
-  async detach(connection) {
-    const owned = await this.owns();
-    if (owned) {
+  async detach(connection, { skipRemote = false } = {}) {
+    if (!skipRemote && !connection.closed) {
+      const owned = await this.owns();
+      if (owned) {
+        try {
+          await connection.command('Runtime.evaluate', { expression: 'window.__agyDragGraftDispose?.();' });
+        } catch {}
+      }
       try {
-        await connection.command('Runtime.evaluate', { expression: 'window.__agyDragGraftDispose?.();' });
+        if (connection.script) await connection.command('Page.removeScriptToEvaluateOnNewDocument', { identifier: connection.script });
       } catch {}
     }
-    try {
-      if (connection.script) await connection.command('Page.removeScriptToEvaluateOnNewDocument', { identifier: connection.script });
-    } catch {}
     connection.close();
   }
 
@@ -499,7 +521,7 @@ export class DragGraftRuntime {
 
       for (const [url, connection] of this.sessions.entries()) {
         if (!activeUrls.has(url) || connection.closed) {
-          await this.detach(connection);
+          await this.detach(connection, { skipRemote: true });
           this.sessions.delete(url);
         }
       }
@@ -510,9 +532,14 @@ export class DragGraftRuntime {
           this.sessions.delete(target.webSocketDebuggerUrl);
         }
       }
+      let lastAttachError = null;
       for (const target of targets) {
         if (!this.sessions.has(target.webSocketDebuggerUrl)) {
-          this.sessions.set(target.webSocketDebuggerUrl, await this.attach(target));
+          try {
+            this.sessions.set(target.webSocketDebuggerUrl, await this.attach(target));
+          } catch (error) {
+            lastAttachError = error;
+          }
         }
       }
 
@@ -549,17 +576,26 @@ export class DragGraftRuntime {
             if (recoverRes?.exceptionDetails) throw new Error('渲染钩子恢复失败');
           }
           connection.mounted = true;
-        } catch {
-          await this.detach(connection);
+        } catch (error) {
+          const timedOut = typeof error?.message === 'string' && error.message.includes('超时');
+          if (!timedOut && !connection.closed && connection.script) {
+            try {
+              await connection.command('Page.removeScriptToEvaluateOnNewDocument', { identifier: connection.script });
+            } catch {}
+          }
+          await this.detach(connection, { skipRemote: true });
           this.sessions.delete(url);
         }
       }
 
       const mountedCount = [...this.sessions.values()].filter((c) => c.mounted).length;
-      await this.writeStatus(
-        mountedCount > 0 ? 'mounted' : 'waiting',
-        mountedCount > 0 ? `已挂载到 ${mountedCount} 个 Antigravity 渲染窗口` : '未发现可挂载的 Antigravity 渲染窗口',
-      );
+      if (mountedCount > 0) {
+        await this.writeStatus('mounted', `已挂载到 ${mountedCount} 个 Antigravity 渲染窗口`);
+      } else if (lastAttachError) {
+        await this.writeStatus('reconnecting', lastAttachError?.message || '等待重新连接 Antigravity 渲染窗口');
+      } else {
+        await this.writeStatus('waiting', '未发现可挂载的 Antigravity 渲染窗口');
+      }
     } catch (error) {
       const missingPort = error?.code === 'ENOENT';
       await this.writeStatus(
@@ -579,7 +615,9 @@ export class DragGraftRuntime {
     this.stopping = false;
     void this.tick();
     this.timer = setInterval(() => { void this.tick(); }, this.interval);
-    this.timer.unref?.();
+    if (!this.keepAlive) {
+      this.timer.unref?.();
+    }
   }
 
   async stop() {

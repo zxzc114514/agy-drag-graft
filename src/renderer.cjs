@@ -21,9 +21,7 @@ module.exports = function installAgyDragGraft(options = {}) {
 
   let disposed = false;
   let drag = null;
-  let highlightedBox = null;
-  let savedStyle = null;
-  let badgeEl = null;
+  const activeHighlights = new Map();
   let styleEl = null;
   let suppressClickUntil = 0;
   let synthesizingCancel = false;
@@ -170,6 +168,15 @@ module.exports = function installAgyDragGraft(options = {}) {
     return null;
   };
 
+  const findVisibleInputBoxes = () => {
+    const root = document.body || document.documentElement;
+    const list = Array.from(root?.querySelectorAll?.('[data-testid="agent-input-box"]') || []);
+    return list.filter((box) => (
+      visible(box)
+      && !box.closest?.('[data-testid="conversation-list-sidebar"], [role="navigation"]')
+    ));
+  };
+
   const hasMentionInEditor = (lex, targetId) => {
     let found = false;
     const walk = (node) => {
@@ -245,53 +252,107 @@ module.exports = function installAgyDragGraft(options = {}) {
     return { ok: true, mode };
   };
 
-  const setHighlight = (box) => {
-    if (highlightedBox === box) return;
-    if (highlightedBox && savedStyle) {
-      highlightedBox.style.outline = savedStyle.outline;
-      highlightedBox.style.outlineOffset = savedStyle.outlineOffset;
-      highlightedBox.style.boxShadow = savedStyle.boxShadow;
-      savedStyle = null;
+  const applyHighlightAppearance = (box, badge, mode) => {
+    const isHover = mode === 'hover';
+    box.style.outline = isHover ? '2px dashed #4c8bf5' : '2px dashed rgba(76, 139, 245, 0.55)';
+    box.style.outlineOffset = '2px';
+    box.style.boxShadow = isHover ? '0 0 0 4px rgba(76, 139, 245, 0.16)' : '0 0 0 3px rgba(76, 139, 245, 0.08)';
+    if (badge && typeof box.getBoundingClientRect === 'function') {
+      const rect = box.getBoundingClientRect();
+      badge.setAttribute('data-agy-drag-graft-mode', mode);
+      badge.textContent = '拖拽到此引用';
+      badge.style.cssText = [
+        'position:fixed',
+        `left:${Math.max(8, Math.round(rect.right - 96))}px`,
+        `top:${Math.max(8, Math.round(rect.top - 26))}px`,
+        'z-index:2147483000', 'padding:2px 8px', 'border-radius:6px',
+        'font-size:11.5px', 'font-weight:500',
+        `background:${isHover ? '#4c8bf5' : 'rgba(76, 139, 245, 0.78)'}`,
+        `opacity:${isHover ? '1' : '0.9'}`,
+        'color:#fff', 'pointer-events:none',
+        `box-shadow:${isHover ? '0 4px 12px rgba(0,0,0,.18)' : '0 2px 8px rgba(0,0,0,.12)'}`,
+      ].join(';');
     }
-    if (badgeEl) {
-      try { badgeEl.remove(); } catch {}
-      badgeEl = null;
+  };
+
+  const removeBoxHighlight = (box) => {
+    const entry = activeHighlights.get(box);
+    if (!entry) return;
+    if (entry.savedStyle) {
+      box.style.outline = entry.savedStyle.outline;
+      box.style.outlineOffset = entry.savedStyle.outlineOffset;
+      box.style.boxShadow = entry.savedStyle.boxShadow;
+    }
+    if (entry.badgeEl) {
+      try { entry.badgeEl.remove(); } catch {}
+    }
+    activeHighlights.delete(box);
+  };
+
+  const clearHighlights = () => {
+    for (const box of Array.from(activeHighlights.keys())) {
+      removeBoxHighlight(box);
     }
     document.documentElement?.removeAttribute?.(HOVER_INPUT_ATTR);
-    highlightedBox = box;
-    if (box && !disposed) {
+  };
+
+  const syncHighlights = (hoveredBox) => {
+    if (disposed || !drag || !drag.moved) {
+      clearHighlights();
+      return;
+    }
+    const boxes = findVisibleInputBoxes();
+    if (hoveredBox && visible(hoveredBox) && !boxes.includes(hoveredBox)) {
+      boxes.push(hoveredBox);
+    }
+    const nextSet = new Set(boxes);
+    for (const box of Array.from(activeHighlights.keys())) {
+      if (!nextSet.has(box)) removeBoxHighlight(box);
+    }
+    if (hoveredBox && nextSet.has(hoveredBox)) {
       ensureSuppressStyle();
       document.documentElement?.setAttribute?.(HOVER_INPUT_ATTR, 'true');
-      savedStyle = {
+    } else {
+      document.documentElement?.removeAttribute?.(HOVER_INPUT_ATTR);
+    }
+    for (const box of boxes) {
+      const targetMode = box === hoveredBox ? 'hover' : 'guide';
+      const existingEntry = activeHighlights.get(box);
+      if (existingEntry) {
+        if (existingEntry.mode === targetMode && (!existingEntry.badgeEl || existingEntry.badgeEl.isConnected)) {
+          continue;
+        }
+        if (!existingEntry.badgeEl && document.body && typeof box.getBoundingClientRect === 'function') {
+          const badge = document.createElement('div');
+          badge.setAttribute('data-agy-drag-graft-ui', 'badge');
+          document.body.appendChild(badge);
+          existingEntry.badgeEl = badge;
+        } else if (existingEntry.badgeEl && !existingEntry.badgeEl.isConnected && document.body) {
+          document.body.appendChild(existingEntry.badgeEl);
+        }
+        applyHighlightAppearance(box, existingEntry.badgeEl, targetMode);
+        existingEntry.mode = targetMode;
+        continue;
+      }
+      const savedStyle = {
         outline: box.style.outline,
         outlineOffset: box.style.outlineOffset,
         boxShadow: box.style.boxShadow,
       };
-      box.style.outline = '2px dashed #4c8bf5';
-      box.style.outlineOffset = '2px';
-      box.style.boxShadow = '0 0 0 4px rgba(76, 139, 245, 0.16)';
+      let badgeEl = null;
       if (document.body && typeof box.getBoundingClientRect === 'function') {
-        const rect = box.getBoundingClientRect();
-        const badge = document.createElement('div');
-        badge.setAttribute('data-agy-drag-graft-ui', 'badge');
-        badge.textContent = '拖拽到此引用';
-        badge.style.cssText = [
-          'position:fixed',
-          `left:${Math.max(8, Math.round(rect.right - 96))}px`,
-          `top:${Math.max(8, Math.round(rect.top - 26))}px`,
-          'z-index:2147483000', 'padding:2px 8px', 'border-radius:6px',
-          'font-size:11.5px', 'font-weight:500', 'background:#4c8bf5',
-          'color:#fff', 'pointer-events:none', 'box-shadow:0 4px 12px rgba(0,0,0,.18)',
-        ].join(';');
-        document.body.appendChild(badge);
-        badgeEl = badge;
+        badgeEl = document.createElement('div');
+        badgeEl.setAttribute('data-agy-drag-graft-ui', 'badge');
+        document.body.appendChild(badgeEl);
       }
+      applyHighlightAppearance(box, badgeEl, targetMode);
+      activeHighlights.set(box, { savedStyle, badgeEl, mode: targetMode });
     }
   };
 
   const clearDragState = () => {
     drag = null;
-    setHighlight(null);
+    clearHighlights();
   };
 
   const cancelHostDrag = (event) => {
@@ -342,7 +403,7 @@ module.exports = function installAgyDragGraft(options = {}) {
       drag.moved = true;
     }
     if (!drag.moved) return;
-    setHighlight(findTargetInputBox(e.clientX, e.clientY));
+    syncHighlights(findTargetInputBox(e.clientX, e.clientY));
   };
 
   const onPointerUp = (e) => {

@@ -10,7 +10,7 @@ A standard plugin for **Antigravity Desktop (`agy`)**. Drag any historical conve
 
 | Drag Source | Drop Target | Behavior |
 | --- | --- | --- |
-| Sidebar conversation row | Composer input box (`[data-testid="agent-input-box"]`) | Shows a dashed blue outline and "拖拽到此引用" badge while hiding the host split overlay over the input box; releasing cancels the host split drag and inserts a native session-reference chip |
+| Sidebar conversation row | Composer input box (`[data-testid="agent-input-box"]`) | Shows a subtle dashed blue guide outline and "拖拽到此引用" badge across visible input boxes once dragging begins (>= 8 px), then intensifies the highlight and hides the host split overlay when hovering over the target input box; releasing cancels the host split drag and inserts a native session-reference chip |
 | Sidebar conversation row | Conversation body / edge split hotzones | Immediately restores the host split overlay and passes events through for native Split View |
 | Sidebar conversation row | Inside the sidebar | Passes events through to keep native reordering, grouping, and navigation |
 | Inline row buttons / short clicks | Any target | Ignored by drag interception to preserve menus and session switching |

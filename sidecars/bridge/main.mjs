@@ -65,9 +65,10 @@ const runtime = new DragGraftRuntime({
       const nextRendererStamp = fileStamp(rendererPath);
       if (nextManifestStamp !== lastManifestStamp || nextRendererStamp !== lastRendererStamp) {
         const nextBundle = loadBundle();
-        runtime.updateBundle(nextBundle);
-        lastManifestStamp = nextManifestStamp;
-        lastRendererStamp = nextRendererStamp;
+        if (runtime.updateBundle({ source: nextBundle.code, version: nextBundle.version })) {
+          lastManifestStamp = nextManifestStamp;
+          lastRendererStamp = nextRendererStamp;
+        }
       }
     } catch (err) {
       console.error('[agy-drag-graft] 热重载读取失败：', err?.message || err);
