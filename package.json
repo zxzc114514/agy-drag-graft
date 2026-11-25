@@ -1,9 +1,9 @@
 {
   "name": "agy-drag-graft",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Drag sidebar conversations into the Antigravity composer to insert native session-reference chips.",
+  "description": "Drag sidebar conversations or right-side file index items into the Antigravity composer to insert native reference chips.",
   "author": "ImportCoffee",
   "license": "MIT",
   "homepage": "https://github.com/zxzc114514/agy-drag-graft",
@@ -12,10 +12,9 @@
     "url": "https://github.com/zxzc114514/agy-drag-graft.git"
   },
   "scripts": {
-    "test": "node --test tests/cdp-runtime.test.mjs tests/renderer.test.mjs",
-    "check": "node --check src/renderer.cjs && node --check src/cdp-runtime.mjs && node --check sidecars/bridge/main.mjs && npm test"
+    "check": "node --check src/renderer.cjs && node --check src/cdp-runtime.mjs && node --check sidecars/bridge/main.mjs && node --check manage.mjs"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   }
 }

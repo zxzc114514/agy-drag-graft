@@ -14,8 +14,34 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]']);
+export const PLUGIN_NAME = 'agy-drag-graft';
+export const SIDECAR_KEY = 'agy-drag-graft/bridge';
+export const MIN_NODE_MAJOR = 22;
 
-const isPidAlive = (pid) => {
+/** 校验当前 Node.js 主版本号满足全局内置 WebSocket 要求（>= 22）。 */
+export function assertSupportedNode(version = process.versions.node) {
+  const major = Number(String(version || '').trim().replace(/^v/i, '').split('.')[0]);
+  if (!Number.isInteger(major) || major < MIN_NODE_MAJOR) {
+    throw new Error(`需要 Node.js ${MIN_NODE_MAJOR}+（当前版本：${version || 'unknown'}）`);
+  }
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function replaceFileAtomic(tmpPath, targetPath, retryMs = 1000) {
+  const deadline = Date.now() + retryMs;
+  for (;;) {
+    try {
+      renameSync(tmpPath, targetPath);
+      return;
+    } catch (error) {
+      if (!['EPERM', 'EACCES', 'EBUSY'].includes(error.code) || Date.now() >= deadline) throw error;
+      await sleep(20);
+    }
+  }
+}
+
+export const isPidAlive = (pid) => {
   if (!Number.isSafeInteger(pid) || pid < 1) return false;
   try {
     process.kill(pid, 0);
@@ -38,23 +64,27 @@ const isNewerOwner = (a, b) => (
   a.startedAt > b.startedAt || (a.startedAt === b.startedAt && a.token > b.token)
 );
 
+/** 解析不同操作系统下 Antigravity 应用配置根目录。 */
+export function resolveConfigBase({ platform = process.platform, home = homedir(), env = process.env } = {}) {
+  if (platform === 'win32') {
+    return env.APPDATA || join(home, 'AppData', 'Roaming');
+  }
+  if (platform === 'darwin') {
+    return join(home, 'Library', 'Application Support');
+  }
+  if (platform === 'linux') {
+    return env.XDG_CONFIG_HOME || join(home, '.config');
+  }
+  throw new Error('仅支持 Windows、macOS 与 Linux 平台');
+}
+
 /** 解析跨平台配置、Antigravity profile 与 Sidecar 数据路径。 */
 export function resolvePaths({ platform = process.platform, home = homedir(), env = process.env } = {}) {
-  let config;
-  if (platform === 'win32') {
-    config = env.APPDATA || join(home, 'AppData', 'Roaming');
-  } else if (platform === 'darwin') {
-    config = join(home, 'Library', 'Application Support');
-  } else if (platform === 'linux') {
-    config = env.XDG_CONFIG_HOME || join(home, '.config');
-  } else {
-    throw new Error('仅支持 Windows、macOS 与 Linux 平台');
-  }
-
+  const config = resolveConfigBase({ platform, home, env });
   const profile = env.AGY_DRAG_GRAFT_PROFILE || join(config, 'Antigravity');
   const pluginConfig = env.AGY_DRAG_GRAFT_CONFIG || join(home, '.gemini', 'config', 'config.json');
   const dataDir = env.ANTIGRAVITY_EXECUTABLE_DATA_DIR
-    || join(home, '.gemini', 'antigravity', 'sidecar_data', 'agy-drag-graft', 'bridge', 'data');
+    || join(home, '.gemini', 'antigravity', 'sidecar_data', PLUGIN_NAME, 'bridge', 'data');
 
   return { profile, pluginConfig, dataDir };
 }
@@ -126,7 +156,7 @@ export class CdpConnection {
   }
 
   async open() {
-    if (!this.WebSocketImpl) throw new Error('当前 Node 运行时缺少 WebSocket 支持');
+    if (!this.WebSocketImpl) throw new Error('当前 Node 运行时缺少全局 WebSocket 支持（需要 Node.js 22+）');
     this.ws = new this.WebSocketImpl(this.url);
     this.ws.addEventListener('message', (event) => {
       try {
@@ -150,6 +180,7 @@ export class CdpConnection {
         this.close();
         reject(new Error('CDP 连接超时'));
       }, this.timeout);
+      timer.unref?.();
       this.ws.addEventListener('open', () => { clearTimeout(timer); resolve(); }, { once: true });
       this.ws.addEventListener('error', () => { clearTimeout(timer); this.close(); reject(new Error('CDP 连接失败')); }, { once: true });
     });
@@ -165,6 +196,7 @@ export class CdpConnection {
         this.pending.delete(id);
         reject(new Error(`CDP 命令超时: ${method}`));
       }, this.timeout);
+      timer.unref?.();
       this.pending.set(id, { resolve, reject, timer });
       try {
         this.ws.send(JSON.stringify({ id, method, params }));
@@ -216,6 +248,7 @@ export class SidecarOwner {
     token = randomUUID(),
     interval = 2000,
     isAlive = isPidAlive,
+    replaceFile = replaceFileAtomic,
   } = {}) {
     this.dataDir = dataDir;
     this.file = join(dataDir, 'active-sidecar.json');
@@ -224,6 +257,7 @@ export class SidecarOwner {
     this.token = token;
     this.interval = interval;
     this.isAlive = isAlive;
+    this.replaceFile = replaceFile;
     this.running = false;
     this.owned = false;
     this.timer = null;
@@ -259,7 +293,7 @@ export class SidecarOwner {
           break;
         } catch {
           if (attempt < 2) {
-            await new Promise((resolve) => setTimeout(resolve, 25));
+            await sleep(25);
           }
         }
       }
@@ -302,7 +336,7 @@ export class SidecarOwner {
           throw inner;
         }
         if (Date.now() > deadline) throw new Error('获取 Sidecar 所有权锁超时');
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await sleep(20);
       }
     }
 
@@ -318,22 +352,13 @@ export class SidecarOwner {
         if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
       }
       writeFileSync(tmp, `${JSON.stringify(candidate)}\n`, { flag: 'wx', mode: 0o600 });
-      const replaceDeadline = Date.now() + 1000;
-      for (;;) {
-        try {
-          renameSync(tmp, this.file);
-          break;
-        } catch (error) {
-          if (!['EPERM', 'EACCES', 'EBUSY'].includes(error.code) || Date.now() >= replaceDeadline) throw error;
-          await new Promise((resolve) => setTimeout(resolve, 20));
-        }
-      }
+      await this.replaceFile(tmp, this.file, 1000);
     } finally {
       try { unlinkSync(tmp); } catch (error) { if (error.code !== 'ENOENT') throw error; }
       try {
         if (JSON.parse(readFileSync(lock, 'utf8')).token === this.token) unlinkSync(lock);
       } catch (error) {
-        if (error.code !== 'ENOENT') throw error;
+        if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
       }
     }
 
@@ -376,7 +401,7 @@ export class DragGraftRuntime {
     profile = resolvePaths().profile,
     dataDir = resolvePaths().dataDir,
     source,
-    version = '0.1.0',
+    version = '0.0.0',
     enabled = async () => true,
     owns = async () => true,
     discover = discoverTargets,
@@ -384,6 +409,8 @@ export class DragGraftRuntime {
     targetOrigin = (target) => new URL(target.url).origin,
     onBeforeTick = null,
     interval = 3000,
+    probeInterval = 30000,
+    statusHeartbeatInterval = 60000,
     keepAlive = true,
   }) {
     if (typeof source !== 'string' || !source) throw new Error('必须提供渲染注入脚本内容');
@@ -398,22 +425,27 @@ export class DragGraftRuntime {
     this.targetOrigin = targetOrigin;
     this.onBeforeTick = onBeforeTick;
     this.interval = interval;
+    this.probeInterval = probeInterval;
+    this.statusHeartbeatInterval = statusHeartbeatInterval;
     this.keepAlive = Boolean(keepAlive);
     this.sessions = new Map();
     this.running = false;
     this.stopping = false;
     this.busy = false;
     this.timer = null;
+    this.lastStatusSignature = '';
+    this.lastStatusWrittenAt = 0;
     this.health = { state: 'waiting', version, windows: 0, message: '等待连接 Antigravity 渲染窗口' };
   }
 
+  buildGuardedSource(origin) {
+    return `if (location.origin === ${JSON.stringify(origin)}) { ${this.source} }`;
+  }
+
   /** 更新内存中的注入脚本与内容指纹，将在下一轮 tick 自动热替换。 */
-  updateBundle({ source, code, version } = {}) {
-    const nextSource = typeof source === 'string' && source
-      ? source
-      : (typeof code === 'string' && code ? code : '');
-    if (!nextSource) return false;
-    this.source = nextSource;
+  updateBundle({ code, version } = {}) {
+    if (typeof code !== 'string' || !code) return false;
+    this.source = code;
     if (typeof version === 'string' && version) {
       this.version = version;
     }
@@ -421,21 +453,28 @@ export class DragGraftRuntime {
   }
 
   async writeStatus(state, message) {
+    const now = Date.now();
     this.health = {
       state,
       version: this.version,
       windows: this.sessions.size,
       message,
-      checkedAt: new Date().toISOString(),
+      checkedAt: new Date(now).toISOString(),
     };
     if (!this.dataDir) return;
+    const signature = `${state}|${this.version}|${this.sessions.size}|${message}`;
+    if (signature === this.lastStatusSignature && now - this.lastStatusWrittenAt < this.statusHeartbeatInterval) {
+      return;
+    }
     let tmp = null;
     try {
       if (!await this.owns()) return;
       await mkdir(this.dataDir, { recursive: true });
       tmp = join(this.dataDir, `status.${process.pid}.tmp`);
       await writeFile(tmp, `${JSON.stringify(this.health, null, 2)}\n`, 'utf8');
-      renameSync(tmp, join(this.dataDir, 'status.json'));
+      await replaceFileAtomic(tmp, join(this.dataDir, 'status.json'), 300);
+      this.lastStatusSignature = signature;
+      this.lastStatusWrittenAt = now;
     } catch {
       if (tmp) {
         try { unlinkSync(tmp); } catch {}
@@ -443,31 +482,52 @@ export class DragGraftRuntime {
     }
   }
 
+  async mountBundle(connection, { replaceExisting = false } = {}) {
+    const guardedSource = this.buildGuardedSource(connection.origin);
+    const oldScript = connection.script;
+    connection.guardedSource = guardedSource;
+    if (replaceExisting && oldScript) {
+      try {
+        await connection.command('Page.removeScriptToEvaluateOnNewDocument', { identifier: oldScript });
+      } catch {}
+    }
+    const preload = await connection.command('Page.addScriptToEvaluateOnNewDocument', { source: guardedSource });
+    connection.script = preload?.identifier ?? null;
+    if (this.stopping || !await this.owns()) {
+      if (replaceExisting) return false;
+      throw new Error('Sidecar 所有权已转移');
+    }
+    const evalRes = await connection.command('Runtime.evaluate', { expression: guardedSource });
+    if (evalRes?.exceptionDetails) {
+      throw new Error(replaceExisting ? '渲染钩子热更新失败' : '主世界脚本初始化异常');
+    }
+    connection.loadedVersion = this.version;
+    connection.mounted = true;
+    connection.needsProbe = false;
+    connection.lastProbedAt = Date.now();
+    return true;
+  }
+
   async attach(target) {
     const connection = this.connect(target.webSocketDebuggerUrl, {
       onEvent: (message) => {
         if (message.method === 'Page.frameNavigated' && message.params?.frame && !message.params.frame.parentId) {
           connection.mounted = false;
+          connection.needsProbe = true;
         }
       },
     });
     connection.origin = this.targetOrigin(target);
     connection.mounted = false;
+    connection.needsProbe = false;
+    connection.lastProbedAt = 0;
     connection.script = null;
-    const guardedSource = `if (location.origin === ${JSON.stringify(connection.origin)}) { ${this.source} }`;
-    connection.guardedSource = guardedSource;
 
     try {
       await connection.open();
       if (this.stopping || !await this.owns()) throw new Error('Sidecar 所有权已转移');
       await connection.command('Page.enable');
-      const preload = await connection.command('Page.addScriptToEvaluateOnNewDocument', { source: guardedSource });
-      connection.script = preload?.identifier ?? null;
-      if (this.stopping || !await this.owns()) throw new Error('Sidecar 所有权已转移');
-      const evalRes = await connection.command('Runtime.evaluate', { expression: guardedSource });
-      if (evalRes?.exceptionDetails) throw new Error('主世界脚本初始化异常');
-      connection.loadedVersion = this.version;
-      connection.mounted = true;
+      await this.mountBundle(connection);
       return connection;
     } catch (error) {
       try {
@@ -525,18 +585,19 @@ export class DragGraftRuntime {
           this.sessions.delete(url);
         }
       }
+      let lastAttachError = null;
+      const freshlyAttached = new Set();
       for (const target of targets) {
-        const existing = this.sessions.get(target.webSocketDebuggerUrl);
+        const wsUrl = target.webSocketDebuggerUrl;
+        const existing = this.sessions.get(wsUrl);
         if (existing && existing.origin !== this.targetOrigin(target)) {
           await this.detach(existing);
-          this.sessions.delete(target.webSocketDebuggerUrl);
+          this.sessions.delete(wsUrl);
         }
-      }
-      let lastAttachError = null;
-      for (const target of targets) {
-        if (!this.sessions.has(target.webSocketDebuggerUrl)) {
+        if (!this.sessions.has(wsUrl)) {
           try {
-            this.sessions.set(target.webSocketDebuggerUrl, await this.attach(target));
+            this.sessions.set(wsUrl, await this.attach(target));
+            freshlyAttached.add(wsUrl);
           } catch (error) {
             lastAttachError = error;
           }
@@ -550,32 +611,30 @@ export class DragGraftRuntime {
 
       const probeExpr = `(() => ({ installed: Boolean(window.__agyDragGraft?.installed), version: window.__agyDragGraft?.version || null }))()`;
       for (const [url, connection] of this.sessions.entries()) {
+        if (freshlyAttached.has(url)) continue;
         try {
           if (connection.loadedVersion !== this.version) {
             if (!await this.owns()) break;
-            const nextGuarded = `if (location.origin === ${JSON.stringify(connection.origin)}) { ${this.source} }`;
-            const oldScript = connection.script;
-            connection.guardedSource = nextGuarded;
-            try {
-              if (oldScript) await connection.command('Page.removeScriptToEvaluateOnNewDocument', { identifier: oldScript });
-            } catch {}
-            const nextPreload = await connection.command('Page.addScriptToEvaluateOnNewDocument', { source: nextGuarded });
-            connection.script = nextPreload?.identifier ?? null;
-            const upgradeRes = await connection.command('Runtime.evaluate', { expression: nextGuarded });
-            if (upgradeRes?.exceptionDetails) throw new Error('渲染钩子热更新失败');
-            connection.loadedVersion = this.version;
-            connection.mounted = true;
+            if (!await this.mountBundle(connection, { replaceExisting: true })) break;
             continue;
           }
-          const checkRes = await connection.command('Runtime.evaluate', { expression: probeExpr, returnByValue: true });
-          if (checkRes?.exceptionDetails) throw new Error('渲染上下文尚未就绪');
-          const status = checkRes?.result?.value;
-          if (!status?.installed || status.version !== this.version) {
-            if (!await this.owns()) break;
-            const recoverRes = await connection.command('Runtime.evaluate', { expression: connection.guardedSource });
-            if (recoverRes?.exceptionDetails) throw new Error('渲染钩子恢复失败');
+          const now = Date.now();
+          const shouldProbe = connection.needsProbe
+            || !connection.mounted
+            || (now - (connection.lastProbedAt || 0) >= this.probeInterval);
+          if (shouldProbe) {
+            const checkRes = await connection.command('Runtime.evaluate', { expression: probeExpr, returnByValue: true });
+            if (checkRes?.exceptionDetails) throw new Error('渲染上下文尚未就绪');
+            const status = checkRes?.result?.value;
+            if (!status?.installed || status.version !== this.version) {
+              if (!await this.owns()) break;
+              const recoverRes = await connection.command('Runtime.evaluate', { expression: connection.guardedSource });
+              if (recoverRes?.exceptionDetails) throw new Error('渲染钩子恢复失败');
+            }
+            connection.mounted = true;
+            connection.needsProbe = false;
+            connection.lastProbedAt = Date.now();
           }
-          connection.mounted = true;
         } catch (error) {
           const timedOut = typeof error?.message === 'string' && error.message.includes('超时');
           if (!timedOut && !connection.closed && connection.script) {

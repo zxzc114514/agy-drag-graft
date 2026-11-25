@@ -2,7 +2,7 @@
 
 [中文](README.md) | English
 
-A standard plugin for **Antigravity Desktop (`agy`)**. Drag any historical conversation from the sidebar directly into the composer input box to insert a native session-reference chip (`contextScopeItemMention`), while suppressing the host split-view overlay only over the input box and preserving native split view, sidebar reordering, and clicks without modifying `app.asar`.
+A standard plugin for **Antigravity Desktop (`agy`)**. Drag any historical conversation from the sidebar—or files and folders from the right-side file index (Workspace file tree, local Artifacts, directory viewer, and path breadcrumb menus)—directly into the composer input box to insert native reference chips (`contextScopeItemMention`), while suppressing the host split-view overlay only over the input box and preserving native split view, sidebar reordering, and clicks without modifying `app.asar`.
 
 ---
 
@@ -11,13 +11,14 @@ A standard plugin for **Antigravity Desktop (`agy`)**. Drag any historical conve
 | Drag Source | Drop Target | Behavior |
 | --- | --- | --- |
 | Sidebar conversation row | Composer input box (`[data-testid="agent-input-box"]`) | Shows a subtle dashed blue guide outline and "拖拽到此引用" badge across visible input boxes once dragging begins (>= 8 px), then intensifies the highlight and hides the host split overlay when hovering over the target input box; releasing cancels the host split drag and inserts a native session-reference chip |
+| Right-side file index (file tree / local Artifact / directory viewer / breadcrumb dropdown) | Composer input box (`[data-testid="agent-input-box"]`) | Displays a width-adaptive drag preview card following the pointer and guides across visible input boxes, inserting a native `file` or `directory` reference chip on drop (and automatically dismissing breadcrumb popovers) |
 | Sidebar conversation row | Conversation body / edge split hotzones | Immediately restores the host split overlay and passes events through for native Split View |
 | Sidebar conversation row | Inside the sidebar | Passes events through to keep native reordering, grouping, and navigation |
 | Inline row buttons / short clicks | Any target | Ignored by drag interception to preserve menus and session switching |
 
 Built-in safeguards:
 - **Self-reference guard**: Prevents dropping the currently active conversation into its own composer.
-- **Draft deduplication**: Skips duplicate session chips in the same draft while allowing multiple distinct sessions to be dragged in sequentially.
+- **Draft deduplication**: Skips duplicate conversation, file, or directory chips in the same draft while allowing multiple distinct references to be dragged in sequentially.
 - **Independent side-pane resolution**: Resolves target cascade IDs separately for the main window, subagent tabs, and Side Question panes.
 - **Plugin isolation**: Runs via standard AGY `plugin.json` + isolated sidecar (`agy-drag-graft/bridge`) and `window.__agyDragGraft` namespace without conflicting with `agy-context-dashboard` or other plugins.
 
@@ -25,7 +26,7 @@ Built-in safeguards:
 
 ## Installation
 
-All scripts have zero third-party dependencies (**Python 3.10+** and **Node.js 20+** required).
+All scripts have zero third-party dependencies (**Node.js 22+** only).
 
 ### Option 1: Ask Antigravity directly
 
@@ -37,36 +38,36 @@ Please install and enable this Antigravity plugin: https://github.com/zxzc114514
 
 Download the latest `agy-drag-graft-<version>.zip` (with `.zip.sha256` checksum) from [GitHub Releases](https://github.com/zxzc114514/agy-drag-graft/releases), extract it, and run the installer inside `agy-drag-graft`:
 
-```powershell
-# Windows (PowerShell)
-.\install.ps1
+```bat
+:: Windows (installs and enables automatically)
+.\install.cmd
 
-# Also enable plugin & sidecar in ~/.gemini/config/config.json
-.\install.ps1 -RegisterConfig
+:: Uninstall (removes plugin directory, config entries, and active window hooks)
+.\uninstall.cmd
 ```
 
 ```sh
-# macOS / Linux
+# macOS / Linux (installs and enables automatically)
 sh install.sh
 
-# Also enable plugin & sidecar in config.json
-sh install.sh --register-config
+# Uninstall
+sh uninstall.sh
 ```
 
-Cross-platform CLI via `manage.py`:
+Cross-platform CLI via `manage.mjs`:
 
 ```bash
 # Inspect installation and runtime status (read-only)
-python manage.py status
+node manage.mjs status
 
-# Install to ~/.gemini/config/plugins/agy-drag-graft (does not modify config.json by default)
-python manage.py install
+# Install to ~/.gemini/config/plugins/agy-drag-graft and enable in config.json by default
+node manage.mjs install
 
-# Install and enable in config.json
-python manage.py install --register-config
+# Copy plugin files only without modifying config.json
+node manage.mjs install --no-register-config
 
-# Uninstall (add --clean-config to also remove entries from config.json)
-python manage.py uninstall --clean-config
+# Uninstall (cleans plugin directory, active window hooks, and config.json entries; pass --keep-config to keep config)
+node manage.mjs uninstall
 ```
 
 ### Remote Debugging Port Requirement
@@ -79,10 +80,9 @@ Starting with Antigravity Desktop `2.33.0+`, the renderer remote debugging port 
 
 ```bash
 npm run check
-python -m unittest discover -s tests -p "test_*.py" -v
 
 # Build offline release ZIP and SHA256 checksum into dist/
-python manage.py package
+node manage.mjs package
 ```
 
 ---

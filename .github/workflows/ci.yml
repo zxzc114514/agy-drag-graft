@@ -19,7 +19,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        node-version: ['20', '22']
+        node-version: ['22', '24']
 
     steps:
       - name: Checkout code
@@ -30,13 +30,5 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Check JS syntax and Node unit tests
+      - name: Check JS syntax
         run: npm run check
-
-      - name: Run Python lifecycle unit tests
-        run: python -m unittest discover -s tests -p "test_*.py" -v

@@ -1,8 +1,8 @@
 {
   "name": "agy-drag-graft",
   "displayName": "AGY Drag Graft",
-  "version": "0.1.1",
-  "description": "将左侧历史会话直接拖入 Antigravity 对话输入框，自动插入原生会话引用胶囊并保留对话区分屏与侧边栏拖拽。",
+  "version": "0.2.0",
+  "description": "将左侧历史会话或右侧文件索引（文件树、本地 Artifact、目录视图、面包屑菜单）直接拖入 Antigravity 对话输入框，自动插入原生引用胶囊并保留分屏与原生点击。",
   "logo": "assets/logo.svg",
   "author": {
     "name": "ImportCoffee",

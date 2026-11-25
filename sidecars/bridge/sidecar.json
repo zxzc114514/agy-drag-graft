@@ -6,5 +6,5 @@
   ],
   "restart_policy": "always",
   "display_name": "AGY Drag Graft Bridge",
-  "description": "Drag sidebar conversations into the Antigravity composer to insert native session-reference chips."
+  "description": "Drag sidebar conversations or right-side file index items into the Antigravity composer to insert native reference chips."
 }
